@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Reddit Sentiment Dashboard</title>
+
+    <link rel="stylesheet" href="/static/style.css" />
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+
+  <body>
+    <header class="header">
+      <h1>Reddit Sentiment Analysis Dashboard</h1>
+    </header>
+
+    <main class="container">
+      <section class="main-grid">
+        <div class="card">
+          <h2>Analyze Reddit Comment</h2>
+
+          <textarea
+            id="textInput"
+            placeholder="Write or paste a Reddit comment here..."
+          ></textarea>
+
+          <button onclick="analyzeText()">Analyze Sentiment</button>
+        </div>
+
+        <div class="card prediction-card">
+          <h2>Prediction Result</h2>
+
+          <div id="emoji" class="emoji">🤖</div>
+          <div id="prediction" class="prediction">Waiting for analyze...</div>
+          <div id="modelStatus" class="status">Checking model...</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Recent Predictions</h2>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Text</th>
+              <th>Sentiment</th>
+              <th>Confidence</th>
+              <th>Event Time</th>
+            </tr>
+          </thead>
+
+          <tbody id="historyTable">
+            <tr>
+              <td colspan="4">No analysis yet</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="/static/script.js"></script>
+  </body>
+</html>

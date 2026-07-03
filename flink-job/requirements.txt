@@ -1,0 +1,11 @@
+# Pinned versions for Flink 1.17.1 Python job
+# numpy must be <2 (apache-beam constraint) and installed BEFORE apache-flink
+numpy==1.24.4
+apache-flink==1.17.1
+scikit-learn==1.3.2
+joblib==1.4.2
+nltk==3.8.1
+psycopg2-binary==2.9.9
+vaderSentiment==3.3.2
+orjson==3.10.1
+zstandard==0.22.0
