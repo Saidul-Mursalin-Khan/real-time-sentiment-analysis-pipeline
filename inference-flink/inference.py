@@ -7,7 +7,9 @@ from pyflink.common.typeinfo import Types
 from pyflink.common.watermark_strategy import WatermarkStrategy
 from pyflink.datastream.functions import MapFunction
 from collections import OrderedDict
+from nltk.stem import SnowballStemmer
 import os
+import re
 import json
 
 
@@ -21,6 +23,8 @@ class InferMapper(MapFunction):
         import joblib
         self._joblib = joblib
         self.cache = OrderedDict()
+        self.stemmer = SnowballStemmer("english")
+        self._emoji_re = re.compile(u"[\U0001F000-\U0001FFFF]")
 
     def map(self, value):
         req = json.loads(value)
@@ -36,7 +40,7 @@ class InferMapper(MapFunction):
             return json.dumps({**req, "available": False})
 
         vec, clf = bundle["vectorizer"], bundle["classifier"]
-        X = vec.transform([keyword])
+        X = vec.transform([self.preprocess(keyword)])
 
         probabilities = clf.predict_proba(X)[0]
         classes = clf.classes_
@@ -71,6 +75,31 @@ class InferMapper(MapFunction):
             self.cache.popitem(last=False)
 
         return bundle
+    
+    def preprocess(self, text: str) -> str:
+        text = text.lower()
+        # Remove URLs
+        text = re.sub(r"https?://\S+|www\.\S+", "", text)
+        # Keep: a-z, whitespace, /r/ subreddit refs, and emoji codepoints
+        # We do this token-by-token to avoid clobbering multi-byte emoji
+        cleaned_chars = []
+        for ch in text:
+            if ch.isalpha() or ch.isspace() or ch == "/" or self._emoji_re.match(ch):
+                cleaned_chars.append(ch)
+            else:
+                cleaned_chars.append(" ")
+        text = "".join(cleaned_chars)
+
+        tokens = text.split()
+        result = []
+        for tok in tokens:
+            if self._emoji_re.search(tok):
+                # Preserve emoji tokens unchanged
+                result.append(tok)
+            # Stop-word filtering intentionally disabled.
+            else:
+                result.append(self.stemmer.stem(tok))
+        return " ".join(result)
 
 
 def main():

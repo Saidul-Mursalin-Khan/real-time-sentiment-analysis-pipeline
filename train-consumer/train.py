@@ -12,54 +12,10 @@ from collections import deque
 # from sklearn.metrics import f1_score
 # import psycopg2
 
-BATCH_SIZE = 20000
-WINDOW_SIZE = 10
+BATCH_SIZE = 100000
+WINDOW_SIZE = 3
 MODEL_DIR   = os.environ.get("MODEL_DIR", "/models")
 KEEP_LAST_K_MODELS = int(os.environ.get("KEEP_LAST_K_MODELS", "10"))
-# ORACLE_PATH = os.environ.get("ORACLE_PATH", "/app/oracle_dataset_clean.csv")
-# DB_HOST     = os.environ.get("DB_HOST", "postgres")
-# DB_NAME     = os.environ.get("DB_NAME", "sentiment")
-# DB_USER     = os.environ.get("DB_USER", "sentiment")
-# DB_PASS     = os.environ.get("DB_PASS", "sentiment")
-
-
-# --- DB-backed evaluation disabled — meaningless for now ---
-# def init_db():
-#     conn = psycopg2.connect(host=DB_HOST, dbname=DB_NAME, user=DB_USER, password=DB_PASS)
-#     cur = conn.cursor()
-#     cur.execute("""
-#         CREATE TABLE IF NOT EXISTS model_versions (
-#             version_id VARCHAR(50) PRIMARY KEY,
-#             created_at TIMESTAMP DEFAULT NOW(),
-#             f1_score FLOAT
-#         );
-#     """)
-#     conn.commit()
-#     cur.close()
-#     conn.close()
-#
-# def save_evaluation(version, f1):
-#     conn = psycopg2.connect(
-#         host=DB_HOST,
-#         dbname=DB_NAME,
-#         user=DB_USER,
-#         password=DB_PASS
-#     )
-#
-#     cur = conn.cursor()
-#     cur.execute("""
-#         INSERT INTO model_versions (
-#                 version_id,
-#                 created_at,
-#                 f1_score)
-#             VALUES (
-#                 %s, NOW(), %s)
-#         """,
-#         (version, f1)
-#     )
-#     conn.commit()
-#     cur.close()
-#     conn.close()
 
 
 def train(train_set):
@@ -70,9 +26,9 @@ def train(train_set):
           f"(positive: {(df_train['label']=='positive').sum()}, "
           f"negative: {(df_train['label']=='negative').sum()})", flush=True)
     
-    vectorizer = TfidfVectorizer(max_features=50000)
+    vectorizer = TfidfVectorizer(max_features=50000, ngram_range=(1, 2))
 
-    x_train=vectorizer.fit_transform(df_train["body"])
+    x_train=vectorizer.fit_transform(df_train["cleaned_body"])
 
     y_train=df_train["label"]
 
@@ -95,16 +51,6 @@ def train(train_set):
     
     
     
-    
-    
-
-    # --- DB-backed F1 evaluation disabled — meaningless for now ---
-    # df_test=pd.read_csv(ORACLE_PATH)
-    # x_test=vectorizer.transform(df_test["body"])
-    # y_test=df_test["label"]
-    # y_pred=model.predict(x_test)
-    # f1=f1_score(y_test, y_pred,average="macro")
-    # save_evaluation(version,f1)
 def event_time_of(path):
     name = os.path.basename(path)
     return int(name.split(".")[0])

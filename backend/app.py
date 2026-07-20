@@ -72,6 +72,7 @@ def make_consumer(topic: str, offset: str) -> KafkaConsumer:
 
 producer = make_producer()
 
+# hello it was already comment out
 
 # def send_inference_request(keyword: str, event_time: int, request_id: str = None) -> str:
 #     rid = request_id or str(uuid.uuid4())
@@ -273,3 +274,5 @@ def index() -> FileResponse:
     return FileResponse(
         os.path.join(os.path.dirname(__file__), "static", "index.html")
     )
+
+

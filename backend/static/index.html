@@ -1,4 +1,6 @@
-<!doctype html>
+// previous index.html
+
+<!-- <!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -61,5 +63,313 @@
     </main>
 
     <script src="/static/script.js"></script>
+  </body>
+</html> -->
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Sentiment Comparison Dashboard</title>
+
+    <link rel="stylesheet" href="/static/style.css" />
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script src="/static/script.js" defer></script>
+  </head>
+
+  <body>
+    <header class="topbar">
+      <div class="container topbar-content">
+        <div class="brand">
+          <div class="brand-icon">SA</div>
+
+          <div>
+            <strong>Sentiment Analysis</strong>
+            <small>Positive and negative analysis over time</small>
+          </div>
+        </div>
+
+        <div id="modelStatus" class="status-badge status-loading">
+          <span class="status-dot"></span>
+          <span id="modelStatusText"> Checking model... </span>
+        </div>
+      </div>
+    </header>
+
+    <main class="container main-content">
+      <section class="hero">
+        <h1>Analyze keywords and sentences over time</h1>
+
+        <p>
+          Enter two keywords, phrases, or sentences. The dashboard compares
+          their positive and negative sentiment across every available model
+          version.
+        </p>
+      </section>
+
+      <section class="card comparison-form-card">
+        <div class="card-header">
+          <div>
+            <h2>Enter two keywords or sentences</h2>
+          </div>
+        </div>
+
+        <form id="comparisonForm">
+          <div class="two-input-grid">
+            <div class="input-panel input-panel-one">
+              <div class="input-number">1</div>
+
+              <label for="firstInput"> First keyword or sentence </label>
+
+              <textarea
+                id="firstInput"
+                rows="5"
+                maxlength="1000"
+                placeholder="Example: ChatGPT"
+                required
+              ></textarea>
+
+              <span class="character-count">
+                <span id="firstCharacterCount">0</span>
+                / 1000
+              </span>
+            </div>
+
+            <div class="comparison-symbol">VS</div>
+
+            <div class="input-panel input-panel-two">
+              <div class="input-number">2</div>
+
+              <label for="secondInput"> Second keyword or sentence </label>
+
+              <textarea
+                id="secondInput"
+                rows="5"
+                maxlength="1000"
+                placeholder="Example: Gemini"
+                required
+              ></textarea>
+
+              <span class="character-count">
+                <span id="secondCharacterCount">0</span>
+                / 1000
+              </span>
+            </div>
+          </div>
+
+          <div class="button-row">
+            <button
+              id="compareButton"
+              class="button button-primary"
+              type="submit"
+            >
+              <span class="button-text">Analyze now</span>
+
+              <span class="button-loader" hidden></span>
+            </button>
+
+            <button
+              id="stopButton"
+              class="button button-danger"
+              type="button"
+              hidden
+            >
+              Stop live updates
+            </button>
+          </div>
+        </form>
+
+        <div id="messageBox" class="message-box" role="alert" hidden></div>
+      </section>
+
+      <section id="comparisonSummary" class="summary-grid" hidden>
+        <article class="card result-card">
+          <div class="result-card-header">
+            <span class="result-number result-number-one"> 1 </span>
+
+            <div>
+              <p class="result-name-label">First input</p>
+
+              <h2 id="firstResultName">—</h2>
+            </div>
+          </div>
+
+          <div class="latest-sentiment">
+            <span>Latest sentiment</span>
+
+            <strong id="firstSentiment" class="sentiment-badge"> — </strong>
+          </div>
+
+          <div class="probability-row">
+            <div class="probability-box positive-box">
+              <span>Positive</span>
+              <strong id="firstPositive">0.0%</strong>
+            </div>
+
+            <div class="probability-box negative-box">
+              <span>Negative</span>
+              <strong id="firstNegative">0.0%</strong>
+            </div>
+          </div>
+        </article>
+
+        <article class="card comparison-result-card">
+          <p class="section-label">Latest comparison</p>
+
+          <h2 id="comparisonTitle">Waiting for results</h2>
+
+          <div id="comparisonWinner" class="winner-box">
+            The comparison result will appear here.
+          </div>
+
+          <div class="difference-container">
+            <div class="difference-label">
+              <span>Positive probability difference</span>
+              <strong id="positiveDifference">0.0%</strong>
+            </div>
+
+            <div class="difference-track">
+              <div id="differenceBar" class="difference-bar"></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card result-card">
+          <div class="result-card-header">
+            <span class="result-number result-number-two"> 2 </span>
+
+            <div>
+              <p class="result-name-label">Second input</p>
+
+              <h2 id="secondResultName">—</h2>
+            </div>
+          </div>
+
+          <div class="latest-sentiment">
+            <span>Latest sentiment</span>
+
+            <strong id="secondSentiment" class="sentiment-badge"> — </strong>
+          </div>
+
+          <div class="probability-row">
+            <div class="probability-box positive-box">
+              <span>Positive</span>
+              <strong id="secondPositive">0.0%</strong>
+            </div>
+
+            <div class="probability-box negative-box">
+              <span>Negative</span>
+              <strong id="secondNegative">0.0%</strong>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="chart-grid">
+        <article class="card chart-card chart-card-large">
+          <div class="card-header">
+            <div>
+              <p class="section-label">Positive sentiment</p>
+
+              <h2>Positive probability over time</h2>
+            </div>
+
+            <div id="liveStatus" class="live-status" hidden>
+              <span></span>
+              Live
+            </div>
+          </div>
+
+          <div class="chart-wrapper">
+            <canvas id="positiveChart"></canvas>
+          </div>
+        </article>
+
+        <article class="card chart-card chart-card-large">
+          <div class="card-header">
+            <div>
+              <p class="section-label">Negative sentiment</p>
+
+              <h2>Negative probability over time</h2>
+            </div>
+          </div>
+
+          <div class="chart-wrapper">
+            <canvas id="negativeChart"></canvas>
+          </div>
+        </article>
+      </section>
+
+      <section class="card chart-card">
+        <div class="card-header">
+          <div>
+            <p class="section-label">Sentiment class</p>
+
+            <h2>Predicted sentiment over time</h2>
+          </div>
+        </div>
+
+        <div class="chart-wrapper">
+          <canvas id="sentimentClassChart"></canvas>
+        </div>
+
+        <div class="class-chart-legend">
+          <span>
+            <i class="positive-legend"></i>
+            Positive = 1
+          </span>
+
+          <span>
+            <i class="negative-legend"></i>
+            Negative = -1
+          </span>
+        </div>
+      </section>
+
+      <section class="card table-card">
+        <div class="card-header">
+          <div>
+            <p class="section-label">Historical results</p>
+
+            <h2>Version-by-version comparison</h2>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Model version</th>
+
+                <th id="firstTableHeader">First input</th>
+
+                <th>Positive</th>
+                <th>Negative</th>
+
+                <th id="secondTableHeader">Second input</th>
+
+                <th>Positive</th>
+                <th>Negative</th>
+
+                <th>More positive</th>
+              </tr>
+            </thead>
+
+            <tbody id="historyTableBody">
+              <tr>
+                <td colspan="8" class="empty-table-cell">
+                  Enter two values and start the comparison.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
   </body>
 </html>
