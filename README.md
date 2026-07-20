@@ -1,292 +1,192 @@
-# Realtime Reddit Sentiment Analysis
+# Real-Time Reddit Sentiment Analysis Pipeline
 
-A cloud-deployed, real-time sentiment analysis pipeline built on Apache Kafka, Apache Flink, and PostgreSQL. The system streams Reddit comments, preprocesses and classifies them using a self-trained TF-IDF + Logistic Regression model. The model automatically retrains as more data is processed.
+A real-time sentiment analysis system built on **Apache Kafka**, **Apache Flink (PyFlink)**, and **FastAPI**. The pipeline replays Reddit comments as a live stream, continuously trains versioned **TF-IDF + Logistic Regression** sentiment models on the labeled stream, and serves keyword sentiment on demand — letting you plot *how sentiment for a keyword changes over time*.
 
 ## Architecture
 
-```
-                                     RC_2019-04.zst
-                                          │
-                                          ▼
-┌───────────────────────────── Data Ingestion Layer ─────────────────────────────┐
-│   ┌───────────────┐          ┌───────────────────────┐                          │
-│   │ data-provider │ ───────▶ │        Kafka          │                          │
-│   │ (producer.py) │          │ topic: reddit-comments│                          │
-│   └───────────────┘          └───────────┬───────────┘                          │
-└──────────────────────────────────────────┼──────────────────────────────────────┘
+![Architecture Diagram](diagram/Architecture_Diagram.png)
 
-                                            ▼
-┌───────────────────── Stream Processing Layer — Apache Flink ───────────────────┐
-│   ┌────────────────────┐     ┌──────────────────┐     ┌──────────────────┐     │
-│   │  preprocess-flink  │────▶│  labeling-flink  │────▶│ inference-flink  │     │
-│   │ (preprocess_job.py)│     │(labeling_job.py) │     │ (inference.py)   │     │
-│   └────────────────────┘     └──────────────────┘     └────────┬─────────┘     │
-└────────────────────────────────────────────────────────────────┼───────────────┘
+### How it works
 
-                                                                  ▼
-┌──────────────────────────────── ML Model Layer ────────────────────────────────┐
-│   ┌───────────────┐        ┌──────────────────────┐    ┌──────────────────┐    │
-│   │ train-consumer│───────▶│  TF-IDF + LogReg     │───▶│sentiment_model_vN│    │
-│   │  (train.py)   │        │  (auto retrain)      │    └──────────────────┘    │
-│   └───────────────┘        └──────────────────────┘                            │
-└────────────────────────────────────────────────────────────────────────────────┘
+1. **`data-provider`** decompresses `RC_2019-04.zst` (Reddit comments, April 2019) and replays them into the `reddit-comments` Kafka topic, preserving original event-time spacing scaled by `SPEED_FACTOR`.
+2. **`preprocess-flink`** (PyFlink) cleans each comment body — lowercasing, URL stripping, punctuation removal (emojis preserved), Snowball stemming — and writes to `cleaned-comments`.
+3. **`labeling-flink`** (PyFlink) labels each cleaned comment using **VADER** compound scores (positive / negative / neutral) and writes to `labeled-train-data`.
+4. **`trainer`** consumes labeled data in a sliding window and retrains a binary **TF-IDF (50k features, 1–2 grams) + LogisticRegression** model per batch (neutral samples are dropped). Each model is versioned by the **Reddit event-time** it represents, saved atomically to a shared volume as `/models/<event_time>.pkl` (only the last K kept), and announced on the `model-version` topic.
+5. **`inference-flink`** (PyFlink) is request-driven: it consumes `inference-request` messages `{request_id, keyword, event_time}`, lazily loads the requested model version (LRU-cached), scores the keyword, and emits the result to `inference-response`.
+6. **`backend`** (FastAPI) bridges Kafka and HTTP: it tracks new model versions, fans out inference requests for all watched keywords on every new version (plus backfill over past versions), collects responses into per-keyword time series, and serves the dashboard frontend.
 
-                                                                  ▼
-┌──────────────────────── Storage & Presentation Layer ──────────────────────────┐
-│   ┌──────────────┐    ┌────────────────┐    ┌──────────────┐    ┌──────────┐   │
-│   │  PostgreSQL  │    │ FastAPI backend│───▶│   Frontend   │    │ Kafka UI │   │
-│   │  (results)   │    │   (app.py)     │    │  (static/)   │    │          │   │
-│   └──────────────┘    └────────────────┘    └──────────────┘    └──────────┘   │
-└────────────────────────────────────────────────────────────────────────────────┘
-```
+All timestamps on the time axis are **Reddit event-time** (`created_utc`, April 2019) — never wall-clock time.
 
 ## Project Structure
 
 ```
-bd26_project_f6_a/
-├── data-provider/
-│   ├── Dockerfile
-│   ├── producer.py           # Reads RC_2019-04.zst, replays to Kafka by timestamp
-│   └── requirements.txt
-├── dataset/
-│   └── RC_2019-04.zst        # Reddit comments dataset (not in repo — download separately)
-├── preprocess-flink/
-│   ├── Dockerfile
-│   ├── preprocess_job.py     # Flink job: cleans raw comments → cleaned-comments topic
-│   └── requirements.txt
-├── labeling-flink/
-│   ├── Dockerfile
-│   ├── labeling_job.py       # Flink job: labels cleaned comments → labeled-train-data topic
-│   └── requirements.txt
-├── inference-flink/
-│   ├── Dockerfile
-│   ├── inference.py          # Flink job: runs sentiment inference using trained model
-│   └── requirements.txt
-├── train-consumer/
-│   ├── Dockerfile
-│   ├── train.py              # Consumes labeled data, trains TF-IDF + LogReg model
-│   ├── data/
-│   │   └── oracle_dataset_clean.csv
-│   └── requirements.txt
-├── backend/
-│   ├── Dockerfile
-│   ├── app.py                # FastAPI backend — REST API + Kafka producer/consumer
-│   ├── static/               # Frontend HTML/JS/CSS
-│   └── requirements.txt
+real-time-sentiment-analysis-pipeline/
+├── data-provider/          # Kafka producer — replays RC_2019-04.zst by created_utc
+│   └── producer.py
+├── preprocess-flink/       # PyFlink: reddit-comments → cleaned-comments
+│   └── preprocess_job.py
+├── labeling-flink/         # PyFlink: cleaned-comments → labeled-train-data (VADER)
+│   └── labeling_job.py
+├── train-consumer/         # Trainer: labeled-train-data → versioned models + model-version
+│   ├── train.py
+│   └── data/               # Oracle dataset (evaluation)
+├── inference-flink/        # PyFlink: inference-request → inference-response
+│   └── inference.py
+├── flink-job/              # Legacy/experimental Flink job
+├── backend/                # FastAPI REST API + Kafka bridge + dashboard
+│   ├── app.py
+│   └── static/             # Frontend (HTML/JS/CSS)
+├── diagram/                # Architecture diagram, training pipeline, Gantt chart
+├── dataset/                # Place RC_2019-04.zst here (not in repo)
 ├── docker-compose.yml
-├── .env
-└── README.md
+└── requirements.txt
 ```
 
 ## Prerequisites
 
-- Docker Engine + Docker Compose v2
-- `RC_2019-04.zst` dataset placed in `./dataset/` directory
-  - Download from: [The Pushshift Reddit Dataset](https://files.pushshift.io/reddit/comments/)
-  - Only `RC_2019-04.zst` (comments file) is needed — not the submissions file
+- Docker Engine + Docker Compose v2 (≥ 8 GB RAM recommended)
+- The `RC_2019-04.zst` Reddit comments dataset placed in `./dataset/`
+  - Source: [Pushshift Reddit comment dumps](https://files.pushshift.io/reddit/comments/) — only the comments file is needed
 
 ## Quick Start
 
-### 1. Clone the repository
-
 ```bash
-git clone https://collaborating.tuhh.de/e-19/teaching/bd26_project_f6_a.git
-cd bd26_project_f6_a
-git checkout dev
-```
+# 1. Clone
+git clone https://github.com/Saidul-Mursalin-Khan/real-time-sentiment-analysis-pipeline.git
+cd real-time-sentiment-analysis-pipeline
 
-### 2. Configure environment
+# 2. Place the dataset
+mkdir -p dataset
+# copy RC_2019-04.zst into ./dataset/
 
-```bash
-cp .env.example .env   # or create manually
-```
-
-Default `.env` contents:
-```env
-KEYWORDS=python,java
-SPEED_FACTOR=100
-RETRAIN_EVERY=50000
-MAX_SAMPLES=300000
-DB_HOST=postgres
-DB_PORT=5432
-DB_NAME=sentiment
-DB_USER=sentiment
-DB_PASS=sentiment
-```
-
-### 3. Place the dataset
-
-```
-bd26_project_f6_a/
-└── dataset/
-    └── RC_2019-04.zst   ← place file here
-```
-
-### 4. Build all images
-
-```bash
+# 3. Build and start everything
 docker compose build
-```
+docker compose up -d
 
-### 5. Start infrastructure
-
-```bash
-docker compose up -d zookeeper kafka postgres pgadmin kafka-ui
-```
-
-Wait for all services to be healthy:
-```bash
+# 4. Check that services are healthy
 docker compose ps
-# zookeeper, kafka, postgres should show "healthy"
 ```
 
-### 6. Initialize Kafka topics
+Startup order is handled automatically: `zookeeper` → `kafka` → `kafka-init` (creates topics) → Flink jobs, trainer, data provider, and backend.
 
-```bash
-docker compose up kafka-init
-```
+Once the trainer has produced its first model (watch `docker logs -f trainer`), open the dashboard.
 
-Wait for: `Topics created and configs synced.`
+## Web UIs
 
-### 7. Start all processing services
-
-```bash
-docker compose up -d preprocess-flink labeling-flink inference-flink trainer backend
-```
-
-### 8. Stream Reddit data into Kafka
-
-```bash
-docker compose up data-provider
-```
-
-Monitor progress:
-```bash
-docker logs -f data-provider
-```
-
----
-
-## Verify Data is Flowing
-
-```bash
-# Check sentiment results in PostgreSQL
-docker exec postgres psql -U sentiment -d sentiment \
-  -c "SELECT sentiment, count(*) FROM sentiment_results GROUP BY sentiment;"
-
-# Check Kafka topic message counts
-docker exec kafka kafka-run-class kafka.tools.GetOffsetShell \
-  --bootstrap-server kafka:9092 \
-  --topic reddit-comments
-```
-
----
-
-## Cloud Deployment (GCP)
-
-The solution is deployed on Google Cloud Platform (europe-west3 / Frankfurt).
-
-| Service | Public URL |
+| URL | Service |
 |---|---|
-| Frontend + API | http://35.198.116.145:8000 |
-| API Docs (Swagger) | http://35.198.116.145:8000/docs |
-| Kafka UI | http://35.198.116.145:8080 |
-| pgAdmin | http://35.198.116.145:5050 |
+| http://localhost:8000 | Dashboard (frontend + API) |
+| http://localhost:8000/docs | Swagger API docs |
+| http://localhost:8080 | Kafka UI — topics, messages, consumer groups |
 
-**VM Specs:** `e2-standard-4` (4 vCPU, 16GB RAM), Ubuntu 22.04 LTS, europe-west3-a
+## Kafka Topics
 
----
+| Topic | Partitions | Retention | Purpose |
+|---|---|---|---|
+| `reddit-comments` | 8 | 1 h | Raw comments from `data-provider` |
+| `cleaned-comments` | 8 | 1 h | Preprocessed comments |
+| `labeled-train-data` | 4 | 1 h | VADER-labeled samples fed to the trainer |
+| `model-version` | 1 | 24 h | New model version events `{event_time}` |
+| `inference-request` | 4 | 1 h | Keyword scoring requests `{request_id, keyword, event_time}` |
+| `inference-response` | 4 | 1 h | Scoring results `{label, proba, …}` |
 
 ## Services
 
-| Service | Description | Port |
+| Service | Description | Host Port |
 |---|---|---|
-| `zookeeper` | Kafka coordination | 2181 |
-| `kafka` | Message broker | 29092 (host) / 9092 (internal) |
-| `kafka-init` | Creates all required Kafka topics | — |
+| `zookeeper` | Kafka coordination | — |
+| `kafka` | Message broker | 29092 |
+| `kafka-init` | One-shot topic creation | — |
 | `kafka-ui` | Kafka web UI | 8080 |
-| `postgres` | Sentiment results storage | 5432 |
-| `pgadmin` | PostgreSQL web UI | 5050 |
-| `data-provider` | Kafka producer — replays .zst file | — |
-| `preprocess-flink` | Flink job: cleans raw comments | — |
-| `labeling-flink` | Flink job: labels comments for training | — |
-| `inference-flink` | Flink job: runs sentiment inference | — |
-| `trainer` | Trains/retrains TF-IDF + LogReg model | — |
-| `backend` | FastAPI REST API + frontend | 8000 |
-
----
+| `data-provider` | Replays the `.zst` dataset into Kafka | — |
+| `preprocess-flink` | PyFlink text-cleaning job | — |
+| `labeling-flink` | PyFlink VADER labeling job | — |
+| `inference-flink` | PyFlink version-addressed inference job | — |
+| `trainer` | Continuous model retraining + versioning | — |
+| `backend` | FastAPI REST API + dashboard | 8000 |
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
+| GET | `/` | Dashboard frontend |
 | GET | `/health` | Service health check |
-| GET | `/model/status` | Latest trained model info |
-| POST | `/watch` | Register keywords for monitoring |
-| GET | `/series` | Sentiment history for visualization |
-| POST | `/analyze` | One-time sentiment analysis on custom input |
-| GET | `/` | Serves the frontend dashboard |
+| GET | `/model/status` | Number of model versions and the latest version |
+| POST | `/watch` | Set keywords to track (`{"keywords": ["marvel", "python"]}`); backfills all known model versions |
+| GET | `/series` | Per-keyword sentiment time series for charting |
+| POST | `/analyze` | One-shot sentiment analysis of custom text against the latest model |
 
----
+### Example
+
+```bash
+# Track two keywords
+curl -X POST http://localhost:8000/watch \
+  -H "Content-Type: application/json" \
+  -d '{"keywords": ["marvel", "python"]}'
+
+# Get the sentiment series (proba.positive is the y-value, event_time the x-value)
+curl http://localhost:8000/series
+
+# Analyze arbitrary text against the latest model
+curl -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text": "this movie was absolutely amazing"}'
+```
+
+## ML Pipeline Details
+
+- **Labeling** — VADER compound score with thresholds (`> 0.37` → positive, `< -0.01` → negative, otherwise neutral). Used only to create training labels (distant supervision).
+- **Training** — sliding window over recent labeled batches; neutral samples are dropped so the classifier is **binary** (positive/negative). TF-IDF with 50,000 features and 1–2 grams, LogisticRegression with `class_weight='balanced'`.
+- **Versioning** — each model's version id is the max `created_utc` in its training window, i.e. the Reddit event-time it represents. Models are written atomically (`.tmp` → rename) and pruned to the last `KEEP_LAST_K_MODELS`.
+- **Inference** — loads models lazily by version with an LRU cache; the keyword is preprocessed with the same cleaning/stemming as training data before scoring. If a requested version has been pruned, the response contains `"available": false`.
+
+### Gotchas
+
+- Out-of-vocabulary keywords return the model prior with no warning — pick keywords that actually appear in the data.
+- A keyword's sentiment only changes when a new model version is trained, so chart points arrive at the retrain cadence.
+- The x-axis is April 2019 event-time, not the current wall-clock.
 
 ## Configuration
 
-Key environment variables (set in `.env`):
+Key environment variables (set in `docker-compose.yml`):
 
-| Variable | Default | Description |
-|---|---|---|
-| `KEYWORDS` | `python,java` | Comma-separated keywords to track |
-| `SPEED_FACTOR` | `100` | Kafka replay speed multiplier |
-| `RETRAIN_EVERY` | `50000` | Trigger retraining every N rows |
-| `MAX_SAMPLES` | `300000` | Max samples per training run |
-| `DB_HOST` | `postgres` | PostgreSQL host |
-| `DB_NAME` | `sentiment` | PostgreSQL database name |
-| `DB_USER` | `sentiment` | PostgreSQL username |
-| `DB_PASS` | `sentiment` | PostgreSQL password |
+| Variable | Default | Service | Description |
+|---|---|---|---|
+| `SPEED_FACTOR` | `100` | data-provider | Replay speed multiplier |
+| `MODEL_DIR` | `/models` | trainer, inference | Shared volume for model files |
+| `KEEP_LAST_K_MODELS` | `10` | trainer | Versioned models kept on disk |
+| `MODEL_CACHE_SIZE` | `10` | inference | Models held in memory (LRU) |
+| `KEEP_VERSIONS` | `50` | backend | Model versions remembered for backfill |
+| `KAFKA_BROKER` | `kafka:9092` | all | Kafka bootstrap server |
 
----
-
-## Docker Hub Images
+## Verify Data Is Flowing
 
 ```bash
-docker pull bd26_project_f6_a-backend:latest
-docker pull bd26_project_f6_a-data-provider:latest
-docker pull bd26_project_f6_a-inference-flink:latest
-docker pull bd26_project_f6_a-labeling-flink:latest
-docker pull bd26_project_f6_a-preprocess-flink:latest
-docker pull bd26_project_f6_a-trainer:latest
+# Watch the producer replaying comments
+docker logs -f data-provider
+
+# Watch the trainer producing model versions
+docker logs -f trainer
+
+# Inspect topic message counts in Kafka UI
+open http://localhost:8080
 ```
 
----
-
-## Reset Everything (Fresh Start)
+## Reset Everything
 
 ```bash
-# Stop all containers and delete all volumes
+# Stop all containers and delete all volumes (Kafka data, models)
 docker compose down -v
 
-# Free up unused Docker resources
+# Optionally reclaim Docker disk space
 docker system prune -f
 ```
 
----
+## Tech Stack
 
-## Kafka Topics
-
-| Topic | Description | Partitions |
-|---|---|---|
-| `reddit-comments` | Raw comments from data-provider | 8 |
-| `cleaned-comments` | Preprocessed comments | 8 |
-| `labeled-train-data` | Labeled data for model training | 4 |
-| `model-version` | Model version update notifications | 1 |
-| `inference-request` | Inference requests from backend | 4 |
-| `inference-response` | Inference results to backend | 4 |
-
----
-
-## Team
-
-- **Repository**: https://collaborating.tuhh.de/e-19/teaching/bd26_project_f6_a
-- **Branch**: `dev`
-- **Course**: Big Data — Project, TUHH
-- **Topic**: A — Sentiment Analysis
+- **Apache Kafka** (Confluent 7.5.0) — event streaming backbone
+- **Apache Flink / PyFlink** — stream processing (preprocess, labeling, inference)
+- **scikit-learn** — TF-IDF + Logistic Regression
+- **VADER** — lexicon-based sentiment labeling
+- **FastAPI + Uvicorn** — REST API and dashboard backend
+- **Docker Compose** — orchestration
