@@ -46,7 +46,7 @@ real-time-sentiment-analysis-pipeline/
 
 - Docker Engine + Docker Compose v2 (≥ 8 GB RAM recommended)
 - The `RC_2019-04.zst` Reddit comments dataset placed in `./dataset/`
-  - Source: [Pushshift Reddit comment dumps](https://files.pushshift.io/reddit/comments/) — only the comments file is needed
+  - Source: [Pushshift Reddit comment dumps](https://zenodo.org/records/3608135) — only the comments file is needed
 
 ## Quick Start
 
